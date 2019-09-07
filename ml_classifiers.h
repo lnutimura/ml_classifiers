@@ -1,3 +1,5 @@
+#include <boost/python.hpp>
+
 #include <map>
 #include <mutex>
 #include <chrono>
@@ -22,6 +24,9 @@
 #include "protocols/tcp.h"
 #include "protocols/udp.h"
 
+/* For convenience */
+namespace bp = boost::python;
+
 using namespace snort;
 using namespace boost::accumulators;
 
@@ -30,6 +35,17 @@ typedef accumulator_set< double, features<tag::count, tag::sum, tag::min, tag::m
 
 class Connection;
 
+static void test_embedded_python () {
+    try {
+    Py_Initialize();
+    bp::object main_module = bp::import("__main__");
+    bp::object main_namespace = main_module.attr("__dict__");
+    bp::exec("print(\"Embedded Python! (Out-of-tree)\")", main_namespace);
+    } catch (bp::error_already_set) {
+        std::cout << "An error occurred while trying embedded Python!" << std::endl;
+    }
+}
+
 /* Mutex */
 std::mutex ml_mutex;
 
@@ -37,7 +53,7 @@ std::mutex ml_mutex;
 std::map<std::string, Connection> connections;
 std::map<std::string, Connection>::iterator connections_it;
 
-/* 
+/*
     Map of timeouted connections.
     Contains the flowID and it's features.
 */
@@ -47,7 +63,7 @@ std::map<std::string, std::vector<float>>::iterator t_connections_it;
 /* This class' features are based on the CICFlowMeter's features. */
 class Connection {
     public:
-        /* 
+        /*
             Basic constructor:
             Initializes most of this class' parameters.
         */
@@ -84,7 +100,7 @@ class Connection {
 
             SfIpString packet_source;
             *(p->ptrs.ip_api.get_src())->ntop(packet_source);
- 
+
             /* Checks whether this packet is coming from the client or the server. */
             if (client_ip == packet_source) {
                 /* Coming from client (forward direction). */
@@ -102,7 +118,7 @@ class Connection {
                     }
                 }
 
-                /* 
+                /*
                     Note: In CICFlowMeter's code, the authors
                     update the flow_length one more time.
                     (Does that makes any sense?)
@@ -156,7 +172,7 @@ class Connection {
             }
 
             flow_length((double)p->dsize);
-            
+
             SfIpString packet_source;
             *(p->ptrs.ip_api.get_src())->ntop(packet_source);
 
@@ -635,7 +651,7 @@ class Connection {
             /*
                 MachineLearningCVE - Features
                 Destination Port, Flow Duration, Total Fwd Packets, Total Backward Packets,Total Length of Fwd Packets,
-                Total Length of Bwd Packets, /, Fwd Packet Length Min, Fwd Packet Length Mean, Fwd Packet Length Std,
+                Total Length of Bwd Packets, Fwd Packet Length Max, Fwd Packet Length Min, Fwd Packet Length Mean, Fwd Packet Length Std,
                 Bwd Packet Length Max, Bwd Packet Length Min, Bwd Packet Length Mean, Bwd Packet Length Std,Flow Bytes/s, Flow Packets/s,
                 Flow IAT Mean, Flow IAT Std, Flow IAT Max, Flow IAT Min,Fwd IAT Total, Fwd IAT Mean, Fwd IAT Std, Fwd IAT Max, Fwd IAT Min,
                 Bwd IAT Total, Bwd IAT Mean, Bwd IAT Std, Bwd IAT Max, Bwd IAT Min,Fwd PSH Flags, Bwd PSH Flags, Fwd URG Flags, Bwd URG Flags,

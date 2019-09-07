@@ -17,7 +17,7 @@
 //--------------------------------------------------------------------------
 // ml_classifier.cc author Luan Utimura <luan.utimura@gmail.com>
 
-#include <iostream>
+#include "ml_classifiers.h"
 
 #include "detection/detection_engine.h"
 #include "events/event_queue.h"
@@ -26,8 +26,6 @@
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
-
-#include "ml_classifiers.h"
 
 using namespace snort;
 
@@ -58,6 +56,8 @@ MLClassifiers::MLClassifiers()
 
 bool MLClassifiers::configure(SnortConfig*)
 {
+    test_embedded_python();
+
     std::thread verify_thread(verify_timeouts);
     verify_thread.detach();
     return true;
@@ -79,11 +79,11 @@ void MLClassifiers::eval(Packet* p)
     */
     if ((p->is_tcp() || p->is_udp() || p->is_icmp()) && p->flow) {
         std::vector<std::string> id_candidates = get_id_candidates(p);
-        
+
         /* Attempts to find an existent connection with the flow_id equals to id_candidates[0]. */
         connections_it = connections.find(id_candidates[0]);
 
-        /* If it couldn't find an existent connection with the above flow_id, it 
+        /* If it couldn't find an existent connection with the above flow_id, it
            attempts again with the flow_id equals to id_candidates[1] .*/
         if (connections_it == connections.end()) {
             connections_it = connections.find(id_candidates[1]);
@@ -112,7 +112,7 @@ void MLClassifiers::eval(Packet* p)
 
 static const Parameter ml_params[] =
 {
-    { "key", Parameter::PT_SELECT, "dt | rf | ab | bnb | gnb | svc", "dt", "machine learning classifier" },
+    { "key", Parameter::PT_SELECT, "dt | rf | nb | svc", "dt", "machine learning classifier" },
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
