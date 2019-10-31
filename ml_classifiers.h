@@ -6,9 +6,13 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <cstdlib>
+#include <iomanip>
+#include <fstream>
 #include <sstream>
 #include <iostream>
 #include <algorithm>
+#include <sys/time.h>
 
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics/sum.hpp>
@@ -30,21 +34,10 @@ namespace bp = boost::python;
 using namespace snort;
 using namespace boost::accumulators;
 
-typedef accumulator_set< uint64_t, features<tag::count, tag::sum, tag::min, tag::max, tag::mean, tag::variance > > intAcc;
+typedef accumulator_set< int64_t, features<tag::count, tag::sum, tag::min, tag::max, tag::mean, tag::variance > > intAcc;
 typedef accumulator_set< double, features<tag::count, tag::sum, tag::min, tag::max, tag::mean, tag::variance > > doubleAcc;
 
 class Connection;
-
-static void test_embedded_python () {
-    try {
-    Py_Initialize();
-    bp::object main_module = bp::import("__main__");
-    bp::object main_namespace = main_module.attr("__dict__");
-    bp::exec("print(\"Embedded Python! (Out-of-tree)\")", main_namespace);
-    } catch (bp::error_already_set) {
-        std::cout << "An error occurred while trying embedded Python!" << std::endl;
-    }
-}
 
 /* Mutex */
 std::mutex ml_mutex;
@@ -54,11 +47,27 @@ std::map<std::string, Connection> connections;
 std::map<std::string, Connection>::iterator connections_it;
 
 /*
-    Map of timeouted connections.
-    Contains the flowID and it's features.
+    Struct of timeouted connections.
+    Contains their id and features.
 */
-std::map<std::string, std::vector<float>> t_connections;
-std::map<std::string, std::vector<float>>::iterator t_connections_it;
+
+struct TimeoutedConnections {
+    std::vector<std::string> id;
+    std::vector<Connection> connections;
+    std::vector<std::vector<double>> features;
+};
+
+TimeoutedConnections t_connections;
+
+/* Auxiliary functions prototypes. */
+int64_t get_time_in_microseconds();
+int64_t get_time_in_microseconds(time_t tvsec, suseconds_t tvusec);
+
+std::vector<std::string> get_id_candidates(Packet* p);
+
+void classify_connections();
+void check_connections(Packet* p);
+void verify_timeouts();
 
 /* This class' features are based on the CICFlowMeter's features. */
 class Connection {
@@ -67,7 +76,7 @@ class Connection {
             Basic constructor:
             Initializes most of this class' parameters.
         */
-        Connection (Packet* p, std::string id) {
+            Connection (Packet* p, std::string id) {
             std::cout << "[+] " << id << std::endl;
 
             /* Initializes the flags_counter and other parameters. */
@@ -85,8 +94,10 @@ class Connection {
             flow_id = id;
             protocol = (uint8_t)p->ip_proto_next;
 
-            uint32_t packet_timestamp = p->pkth->ts.tv_sec;
-
+            /* The packet's timestamp in microseconds. */
+            //uint32_t packet_timestamp = p->pkth->ts.tv_usec;
+            int64_t packet_timestamp = get_time_in_microseconds(p->pkth->ts.tv_sec, p->pkth->ts.tv_usec);
+            
             flow_first_seen = flow_last_seen =
                 start_active_time = end_active_time = packet_timestamp;
 
@@ -162,15 +173,21 @@ class Connection {
 
         /* Method used to update a connection based on the packet's information. */
         void add_packet(Packet* p) {
-            uint32_t packet_timestamp = p->pkth->ts.tv_sec;
+            //uint32_t packet_timestamp = p->pkth->ts.tv_usec;
+            int64_t packet_timestamp = get_time_in_microseconds(p->pkth->ts.tv_sec, p->pkth->ts.tv_usec);
+            
+            /*
+            For some reason, the CICFlowMeter's authors kept these
+            three lines commented for a long time.
 
             update_flow_bulk(p);
             update_subflows(p);
-
+            
             if (p->is_tcp()) {
                 update_flags_counter(p);
             }
-
+            */
+            
             flow_length((double)p->dsize);
 
             SfIpString packet_source;
@@ -199,9 +216,11 @@ class Connection {
 
                 if (forward_count > 1) {
                     forward_iat(packet_timestamp - forward_last_seen);
-                    forward_last_seen = packet_timestamp;
-                    min_seg_size_forward = std::min((p->pkth->pktlen - p->dsize), min_seg_size_forward);
                 }
+                
+                forward_last_seen = packet_timestamp;
+                min_seg_size_forward = std::min((p->pkth->pktlen - p->dsize), min_seg_size_forward);
+        
             } else {
                 if (p->is_tcp()) {
                     init_win_bytes_backward = p->ptrs.tcph->th_win;
@@ -223,8 +242,9 @@ class Connection {
 
                 if (backward_count > 1) {
                     backward_iat(packet_timestamp - backward_last_seen);
-                    backward_last_seen = packet_timestamp;
                 }
+                
+                backward_last_seen = packet_timestamp;
             }
 
             flow_iat(packet_timestamp - flow_last_seen);
@@ -305,10 +325,11 @@ class Connection {
         }
 
         /* Method used to update the bulk flow in the forward direction. */
-        void update_forward_bulk(Packet* p, uint32_t op_bulk_last_timestamp) {
+        void update_forward_bulk(Packet* p, int64_t op_bulk_last_timestamp) {
             uint32_t size = p->dsize;
-            uint32_t packet_timestamp = p->pkth->ts.tv_sec;
-
+            //uint32_t packet_timestamp = p->pkth->ts.tv_usec;
+            int64_t packet_timestamp = get_time_in_microseconds(p->pkth->ts.tv_sec, p->pkth->ts.tv_usec);
+            
             if (op_bulk_last_timestamp > f_bulk_start_helper) f_bulk_start_helper = 0;
             if (size <= 0) return;
 
@@ -318,7 +339,7 @@ class Connection {
                 f_bulk_start_helper = packet_timestamp;
                 f_bulk_last_timestamp = packet_timestamp;
             } else {
-                if ((packet_timestamp - f_bulk_last_timestamp) > 1) {
+                if (((packet_timestamp - f_bulk_last_timestamp) / (double)1000000) > 1) {
                     f_bulk_size_helper = size;
                     f_bulk_packet_count_helper = 1;
                     f_bulk_start_helper = packet_timestamp;
@@ -346,8 +367,9 @@ class Connection {
         /* Method used to update the bulk flow in the backward direction. */
         void update_backward_bulk(Packet* p, uint32_t op_bulk_last_timestamp) {
             uint32_t size = p->dsize;
-            uint32_t packet_timestamp = p->pkth->ts.tv_sec;
-
+            //uint32_t packet_timestamp = p->pkth->ts.tv_usec;
+            int64_t packet_timestamp = get_time_in_microseconds(p->pkth->ts.tv_sec, p->pkth->ts.tv_usec);
+            
             if (op_bulk_last_timestamp > b_bulk_start_helper) b_bulk_start_helper = 0;
             if (size <= 0) return;
 
@@ -358,7 +380,7 @@ class Connection {
                 b_bulk_last_timestamp = packet_timestamp;
             }
             else {
-                if ((packet_timestamp - b_bulk_last_timestamp) > 1) {
+                if (((packet_timestamp - b_bulk_last_timestamp) / (double)1000000) > 1) {
                     b_bulk_size_helper = size;
                     b_bulk_packet_count_helper = 1;
                     b_bulk_start_helper = packet_timestamp;
@@ -398,7 +420,7 @@ class Connection {
         }
 
         /* Method used to update both active and idle time of the flow. */
-        void update_active_idle_time(uint32_t current_time, uint32_t threshold) {
+        void update_active_idle_time(int64_t current_time, int64_t threshold) {
             if ((current_time - end_active_time) > threshold) {
                 if ((end_active_time - start_active_time) > 0) {
                     flow_active(end_active_time - start_active_time);
@@ -414,17 +436,18 @@ class Connection {
 
         /* Method used to update subflows. */
         void update_subflows(Packet* p) {
-            uint32_t packet_timestamp = p->pkth->ts.tv_sec;
-
+            //uint32_t packet_timestamp = p->pkth->ts.tv_usec;
+            int64_t packet_timestamp = get_time_in_microseconds(p->pkth->ts.tv_sec, p->pkth->ts.tv_usec);
+            
             if (sf_last_packet_timestamp == -1) {
                 sf_last_packet_timestamp = packet_timestamp;
                 sf_ac_helper = packet_timestamp;
             }
 
-            if ((packet_timestamp - sf_last_packet_timestamp) > 1) {
+            if (((packet_timestamp - sf_last_packet_timestamp) / (double)1000000) > 1) {
                 sf_count += 1;
-                uint32_t last_sf_duration = packet_timestamp - sf_ac_helper;
-                update_active_idle_time(packet_timestamp - sf_last_packet_timestamp, 5);
+                int64_t last_sf_duration = packet_timestamp - sf_ac_helper;
+                update_active_idle_time(packet_timestamp - sf_last_packet_timestamp, 5000000);
                 sf_ac_helper = packet_timestamp;
             }
 
@@ -436,50 +459,50 @@ class Connection {
             return flow_id;
         }
         
-        uint32_t get_flowfirstseen() {
+        int64_t get_flowfirstseen() {
             return flow_first_seen;
         }
 
-        uint32_t get_flowlastseen() {
+        int64_t get_flowlastseen() {
             return flow_last_seen;
         }
 
         double get_flowbytespersec() {
-            uint32_t duration = flow_last_seen - flow_first_seen;
+            int64_t duration = flow_last_seen - flow_first_seen;
 
             if (duration > 0) {
-                return ((double)(forward_bytes + backward_bytes) / (double)duration);
+                return ((double)(forward_bytes + backward_bytes)) / ((double)duration/1000000);
             } else {
                 return 0;
             }
         }
 
         double get_flowpktspersec() {
-            uint32_t duration = flow_last_seen - flow_first_seen;
+            int64_t duration = flow_last_seen - flow_first_seen;
             uint32_t packet_count = forward_count + backward_count;
 
             if (duration > 0) {
-                return ((double)packet_count / (double)duration);
+                return ((double)packet_count) / ((double)duration/1000000);
             } else {
                 return 0;
             }
         }
 
         double get_fpktspersec() {
-            uint32_t duration = flow_last_seen - flow_first_seen;
+            int64_t duration = flow_last_seen - flow_first_seen;
 
             if (duration > 0) {
-                return (forward_count / duration);
+                return ((double)forward_count) / ((double)duration/1000000);
             } else {
                 return 0;
             }
         }
 
         double get_bpktspersec() {
-            uint32_t duration = flow_last_seen - flow_first_seen;
+            int64_t duration = flow_last_seen - flow_first_seen;
 
             if (duration > 0) {
-                return (backward_count / duration);
+                return ((double)backward_count) / ((double)duration/1000000);
             }
             else {
                 return 0;
@@ -488,7 +511,7 @@ class Connection {
 
         double get_downupratio() {
             if (forward_count > 0) {
-                return (double)(backward_count / forward_count);
+                return ((double)backward_count / (double)forward_count);
             } else {
                 return 0;
             }
@@ -497,23 +520,23 @@ class Connection {
         double get_avgpktsize() {
             uint32_t packet_count = forward_count + backward_count;
             if (packet_count > 0) {
-                return (sum(flow_length) / packet_count);
+                return (sum(flow_length) / (double)packet_count);
             } else {
                 return 0;
             }
         }
 
         double get_favgsegmentsize() {
-            if (forward_count != 0) {
-                return (sum(forward_pkt) / forward_count);
+            if (forward_count > 0) {
+                return (sum(forward_pkt) / (double)forward_count);
             } else {
                 return 0;
             }
         }
 
         double get_bavgsegmentsize() {
-            if (backward_count != 0) {
-                return (sum(backward_pkt) / backward_count);
+            if (backward_count > 0) {
+                return (sum(backward_pkt) / (double)backward_count);
             } else {
                 return 0;
             }
@@ -521,7 +544,7 @@ class Connection {
 
         double get_fsubflowbytes() {
             if (sf_count > 0) {
-                return (forward_bytes / sf_count);
+                return ((double)forward_bytes / (double)sf_count);
             } else {
                 return 0;
             }
@@ -529,7 +552,7 @@ class Connection {
 
         double get_fsubflowpkts() {
             if (sf_count > 0) {
-                return (forward_count / sf_count);
+                return ((double)forward_count / (double)sf_count);
             } else {
                 return 0;
             }
@@ -537,7 +560,7 @@ class Connection {
 
         double get_bsubflowbytes() {
             if (sf_count > 0) {
-                return (backward_bytes / sf_count);
+                return ((double)backward_bytes / (double)sf_count);
             } else {
                 return 0;
             }
@@ -545,7 +568,7 @@ class Connection {
 
         double get_bsubflowpkts() {
             if (sf_count > 0) {
-                return (backward_count / sf_count);
+                return ((double)backward_count / (double)sf_count);
             } else {
                 return 0;
             }
@@ -563,10 +586,14 @@ class Connection {
             return f_bulk_packet_count;
         }
 
-        uint32_t get_fbulkduration() {
+        int64_t get_fbulkduration() {
             return f_bulk_duration;
         }
 
+        double get_fbulkduration_seconds() {
+            return f_bulk_duration / (double)1000000;
+        }
+        
         uint32_t get_favgbytesperbulk() {
             if (get_fbulkstatecount() != 0) {
                 return (get_fbulktotalsize() / get_fbulkstatecount());
@@ -585,7 +612,7 @@ class Connection {
 
         uint32_t get_favgbulkrate() {
             if (get_fbulkduration() != 0) {
-                return (uint32_t)(get_fbulktotalsize() / get_fbulkduration());
+                return (uint32_t)(get_fbulktotalsize() / get_fbulkduration_seconds());
             } else {
                 return 0;
             }
@@ -603,10 +630,14 @@ class Connection {
             return b_bulk_packet_count;
         }
 
-        uint32_t get_bbulkduration() {
+        int64_t get_bbulkduration() {
             return b_bulk_duration;
         }
 
+        double get_bbulkduration_seconds() {
+            return b_bulk_duration / (double)1000000;
+        }
+        
         uint32_t get_bavgbytesperbulk() {
             if (get_bbulkstatecount() != 0) {
                 return (get_bbulktotalsize() / get_bbulkstatecount());
@@ -625,7 +656,7 @@ class Connection {
 
         uint32_t get_bavgbulkrate() {
             if (get_bbulkduration() != 0) {
-                return (uint32_t)(get_bbulktotalsize() / get_bbulkduration());
+                return (uint32_t)(get_bbulktotalsize() / get_bbulkduration_seconds());
             } else {
                 return 0;
             }
@@ -664,7 +695,7 @@ class Connection {
                 Idle Std, Idle Max, Idle Min, Label
             */
 
-            uint32_t duration = flow_last_seen - flow_first_seen;
+            int64_t duration = flow_last_seen - flow_first_seen;
 
             feature_vector.push_back(server_port);                      /* 1  */
 
@@ -786,6 +817,12 @@ class Connection {
             feature_vector.push_back(get_favgsegmentsize());            /* 54 */
             feature_vector.push_back(get_bavgsegmentsize());            /* 55 */
 
+            feature_vector.push_back(forward_hbytes);                   /* 
+                                                                           This feature is duplicated (35). 
+                                                                           I'm keeping it because the CICIDS2017's authors kept it in the CSV
+                                                                           files used to train the machine learning techniques.
+                                                                        */
+            
             feature_vector.push_back(get_favgbytesperbulk());           /* 56 */
             feature_vector.push_back(get_favgpktsperbulk());            /* 57 */
             feature_vector.push_back(get_favgbulkrate());               /* 58 */
@@ -857,16 +894,16 @@ class Connection {
         uint32_t backward_count;
 
         /* First and last time this flow was seen */
-        uint32_t flow_first_seen;
-        uint32_t flow_last_seen;
+        int64_t flow_first_seen;
+        int64_t flow_last_seen;
 
         /* Last time the forward/backward direction of the flow was seen */
-        uint32_t forward_last_seen;
-        uint32_t backward_last_seen;
+        int64_t forward_last_seen;
+        int64_t backward_last_seen;
 
         /* Start/end of this flow active time */
-        uint32_t start_active_time;
-        uint32_t end_active_time;
+        int64_t start_active_time;
+        int64_t end_active_time;
 
         /* Flags counter (TCP) */
         std::map<std::string, uint32_t> flags_counter;
@@ -918,35 +955,48 @@ class Connection {
     */
         /* Subflows */
         uint32_t sf_count = 0;
-        uint32_t sf_ac_helper = -1;
-        uint32_t sf_last_packet_timestamp = -1;
+        int64_t sf_ac_helper = -1;              /* This is initialized as -1, so it has to be int32_t. */
+        int64_t sf_last_packet_timestamp = -1;  /* This is initialized as -1, so it has to be int32_t. */
 
         /* Forward bulk flow. */
-        uint32_t f_bulk_duration = 0;
+        int64_t f_bulk_duration = 0;
         uint32_t f_bulk_total_size = 0;
 
         uint32_t f_bulk_state_count = 0;
         uint32_t f_bulk_packet_count = 0;
 
         uint32_t f_bulk_size_helper = 0;
-        uint32_t f_bulk_start_helper = 0;
+        int64_t f_bulk_start_helper = 0;
         uint32_t f_bulk_packet_count_helper = 0;
 
-        uint32_t f_bulk_last_timestamp = 0;
+        int64_t f_bulk_last_timestamp = 0;
 
         /* Backward bulk flow. */
-        uint32_t b_bulk_duration = 0;
+        int64_t b_bulk_duration = 0;
         uint32_t b_bulk_total_size = 0;
 
         uint32_t b_bulk_state_count = 0;
         uint32_t b_bulk_packet_count = 0;
 
         uint32_t b_bulk_size_helper = 0;
-        uint32_t b_bulk_start_helper = 0;
+        int64_t b_bulk_start_helper = 0;
         uint32_t b_bulk_packet_count_helper = 0;
 
-        uint32_t b_bulk_last_timestamp = 0;
+        int64_t b_bulk_last_timestamp = 0;
 };
+
+/*
+    Auxiliary function used to retrieve the current time in microseconds.
+*/
+int64_t get_time_in_microseconds() {
+    struct timeval timestamp;
+    gettimeofday(&timestamp, NULL);
+    return timestamp.tv_sec * (int)1e6 + timestamp.tv_usec;
+}
+
+int64_t get_time_in_microseconds(time_t tvsec, suseconds_t tvusec) {
+    return tvsec * (int)1e6 + tvusec;
+}
 
 /* 
     Auxiliary function used to retrieve possible strings for the flow id:
@@ -985,6 +1035,66 @@ std::vector<std::string> get_id_candidates(Packet* p) {
 }
 
 /*
+    Auxiliary function used to classify the timeouted connections.
+*/
+void classify_connections() {
+    /* Creates a file containing the feature vector of each timeouted connection. */
+    std::ofstream outputFile;
+    outputFile.open("/home/lnutimura/Desktop/ml_classifiers/tmp/timeouted_connections.txt", std::ios_base::trunc);
+    
+    for (int i = 0; i < t_connections.id.size(); i++) {
+        outputFile << std::fixed << std::setprecision(9);
+        
+        for (int j = 0; j < 78; j++) {
+            outputFile << t_connections.features[i][j];
+            
+            if (j == 77)
+                outputFile << std::scientific << "\n";
+            else
+                outputFile << " ";
+        }
+    }
+    outputFile.close();
+    
+    /* Executes the script that classifies every single feature vector in the timeouted_connections.txt file. */
+    std::string py_cmd = "python3 /home/lnutimura/Desktop/ml_classifiers/ml_classifiers.py dt";
+    system(py_cmd.c_str());
+    
+    /* Reads the predictions of every single connection timeouted previously. */
+    std::ifstream inputFile ("/home/lnutimura/Desktop/ml_classifiers/tmp/timeouted_connections_results.txt");
+    
+    if (inputFile.is_open()) {
+        std::string line;
+        uint32_t index = 0;
+        
+        while (std::getline(inputFile, line)) {
+            float predictedValue;
+            
+            std::cout << "[-] " << t_connections.id[index] << std::endl;
+            t_connections.connections[index].print_feature_vector(t_connections.features[index]);
+            std::cout << "\tResult: ";
+            
+            std::istringstream iss (line);
+            iss >> predictedValue;
+            
+            if (predictedValue == 0.0f) {
+                std::cout << "Normal (" << predictedValue << ")" << std::endl;
+            } else {
+                std::cout << "Attack (" << predictedValue << ")" << std::endl;
+            }
+            
+            index++;
+        }
+        
+        inputFile.close();
+    }
+    
+    t_connections.id.clear();
+    t_connections.connections.clear();
+    t_connections.features.clear();
+}
+
+/*
     Auxiliary function used to check currently active connections 
     and handle timeouted connections.
 */
@@ -994,7 +1104,7 @@ void check_connections(Packet* p) {
     ml_mutex.unlock();
 
     for (auto it = active_connections.begin(); it != active_connections.end(); it++) {
-        uint32_t time_difference;
+        int64_t time_difference;
 
         /* 
             If this function is called with a null argument (p == nullptr), it means
@@ -1005,31 +1115,46 @@ void check_connections(Packet* p) {
         */
         if (p == nullptr) {
             //time_difference = time(nullptr) - it->second.flow_last_seen;
-            time_difference = time(nullptr) - it->second.get_flowlastseen();
+            //time_difference = time(nullptr) - it->second.get_flowlastseen();
+            time_difference = get_time_in_microseconds() - it->second.get_flowlastseen();
         } else {
             //time_difference = p->pkth->ts.tv_sec - it->second.flow_last_seen;
-            time_difference = p->pkth->ts.tv_sec - it->second.get_flowlastseen();
+            //time_difference = p->pkth->ts.tv_usec - it->second.get_flowlastseen();
+            time_difference = get_time_in_microseconds(p->pkth->ts.tv_sec, p->pkth->ts.tv_usec) - it->second.get_flowlastseen();
         }
 
         /* Assuming a default timeout value of 120 sec. */
-        if (time_difference > 120) {
+        if (time_difference > 120000000) {
             ml_mutex.lock();
             
-            /* Iterator pointing to the soon-to-be timeouted Connection. */
+            /* Iterator pointing to the soon-to-be timeouted connection. */
             std::map<std::string, Connection>::iterator t_it = connections.find(it->first);
 
 
             if (t_it != connections.end()) {
-                /* TODO: Retrieves all the flow's information and puts them in a vector. */
-                std::cout << "[-] " << t_it->second.get_flowid() << std::endl;
-
+                /* Retrieves all the flow's information and puts them in a vector. */
                 std::vector<double> feature_vector = t_it->second.get_feature_vector();
-                t_it->second.print_feature_vector(feature_vector);
-
+                
+                /* 
+                    Transfer the timeouted connection to a struct responsible for 
+                    holding it's informations.
+                */
+                t_connections.id.push_back(t_it->second.get_flowid());
+                t_connections.features.push_back(feature_vector);
+                t_connections.connections.push_back(t_it->second);
+                
                 connections.erase(t_it);
             }
             ml_mutex.unlock();
         }
+    }
+    
+    /*
+        If there are timeouted connections inside the t_connections struct,
+        we have to classify them.
+    */
+    if (t_connections.id.size() > 0) {
+        classify_connections();
     }
 }
 

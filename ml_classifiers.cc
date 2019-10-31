@@ -56,8 +56,6 @@ MLClassifiers::MLClassifiers()
 
 bool MLClassifiers::configure(SnortConfig*)
 {
-    test_embedded_python();
-
     std::thread verify_thread(verify_timeouts);
     verify_thread.detach();
     return true;
