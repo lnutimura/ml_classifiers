@@ -109,16 +109,20 @@ class Connection {
             p->flow->server_ip.ntop(server_ip);
             server_port = p->flow->server_port;
 
-            SfIpString packet_source;
-            *(p->ptrs.ip_api.get_src())->ntop(packet_source);
-
+            /* Instead of comparing client_ip w/ packet_source,
+               I'll use "p->is_from_client()".
+             
+                SfIpString packet_source;
+                *(p->ptrs.ip_api.get_src())->ntop(packet_source);
+            */
+            
             /* Checks whether this packet is coming from the client or the server. */
-            if (client_ip == packet_source) {
+            if (p->is_from_client()) {
                 /* Coming from client (forward direction). */
                 min_seg_size_forward = p->pkth->pktlen - p->dsize;
 
                 if (p->is_tcp()) {
-                    init_win_bytes_forward = p->ptrs.tcph->th_win;
+                    init_win_bytes_forward = p->ptrs.tcph->win();
 
                     if (p->ptrs.tcph->are_flags_set(TH_PUSH)) {
                         forward_PSH += 1;
@@ -145,7 +149,7 @@ class Connection {
             } else {
                 /* Coming from server (backward direction). */
                 if (p->is_tcp()) {
-                    init_win_bytes_backward = p->ptrs.tcph->th_win;
+                    init_win_bytes_backward = p->ptrs.tcph->win();
 
                     if (p->ptrs.tcph->are_flags_set(TH_PUSH)) {
                         backward_PSH += 1;
@@ -179,21 +183,23 @@ class Connection {
             /*
             For some reason, the CICFlowMeter's authors kept these
             three lines commented for a long time.
-
+            */
             update_flow_bulk(p);
             update_subflows(p);
             
             if (p->is_tcp()) {
                 update_flags_counter(p);
             }
-            */
+            
             
             flow_length((double)p->dsize);
 
-            SfIpString packet_source;
-            *(p->ptrs.ip_api.get_src())->ntop(packet_source);
+            /*
+                SfIpString packet_source;
+                *(p->ptrs.ip_api.get_src())->ntop(packet_source);
+            */
 
-            if (client_ip == packet_source) {
+            if (p->is_from_client()) {
                 if (p->dsize >= 1.0f) {
                     act_data_pkt_forward += 1;
                 }
@@ -223,7 +229,7 @@ class Connection {
         
             } else {
                 if (p->is_tcp()) {
-                    init_win_bytes_backward = p->ptrs.tcph->th_win;
+                    init_win_bytes_backward = p->ptrs.tcph->win();
 
                     if (p->ptrs.tcph->are_flags_set(TH_PUSH)) {
                         backward_PSH += 1;
@@ -409,10 +415,11 @@ class Connection {
 
         /* Method used to update the bulk flow. */
         void update_flow_bulk(Packet* p) {
-            SfIpString packet_source;
-            *(p->ptrs.ip_api.get_src())->ntop(packet_source);
-
-            if (client_ip == packet_source) {
+            /*
+                SfIpString packet_source;
+                *(p->ptrs.ip_api.get_src())->ntop(packet_source);
+            */
+            if (p->is_from_client()) {
                 update_forward_bulk(p, b_bulk_last_timestamp);
             } else {
                 update_backward_bulk(p, f_bulk_last_timestamp);
@@ -817,35 +824,35 @@ class Connection {
             feature_vector.push_back(get_favgsegmentsize());            /* 54 */
             feature_vector.push_back(get_bavgsegmentsize());            /* 55 */
 
-            feature_vector.push_back(forward_hbytes);                   /* 
+            feature_vector.push_back(forward_hbytes);                   /* 56
                                                                            This feature is duplicated (35). 
                                                                            I'm keeping it because the CICIDS2017's authors kept it in the CSV
                                                                            files used to train the machine learning techniques.
                                                                         */
             
-            feature_vector.push_back(get_favgbytesperbulk());           /* 56 */
-            feature_vector.push_back(get_favgpktsperbulk());            /* 57 */
-            feature_vector.push_back(get_favgbulkrate());               /* 58 */
-            feature_vector.push_back(get_bavgbytesperbulk());           /* 59 */
-            feature_vector.push_back(get_bavgpktsperbulk());            /* 60 */
-            feature_vector.push_back(get_bavgbulkrate());               /* 61 */
+            feature_vector.push_back(get_favgbytesperbulk());           /* 57 */
+            feature_vector.push_back(get_favgpktsperbulk());            /* 58 */
+            feature_vector.push_back(get_favgbulkrate());               /* 59 */
+            feature_vector.push_back(get_bavgbytesperbulk());           /* 60 */
+            feature_vector.push_back(get_bavgpktsperbulk());            /* 61 */
+            feature_vector.push_back(get_bavgbulkrate());               /* 62 */
 
-            feature_vector.push_back(get_fsubflowpkts());               /* 62 */
-            feature_vector.push_back(get_fsubflowbytes());              /* 63 */
-            feature_vector.push_back(get_bsubflowpkts());               /* 64 */
-            feature_vector.push_back(get_bsubflowbytes());              /* 65 */
+            feature_vector.push_back(get_fsubflowpkts());               /* 63 */
+            feature_vector.push_back(get_fsubflowbytes());              /* 64 */
+            feature_vector.push_back(get_bsubflowpkts());               /* 65 */
+            feature_vector.push_back(get_bsubflowbytes());              /* 66 */
 
-            feature_vector.push_back(init_win_bytes_forward);           /* 66 */
-            feature_vector.push_back(init_win_bytes_backward);          /* 67 */
-            feature_vector.push_back(act_data_pkt_forward);             /* 68 */
-            feature_vector.push_back(min_seg_size_forward);             /* 69 */
+            feature_vector.push_back(init_win_bytes_forward);           /* 67 */
+            feature_vector.push_back(init_win_bytes_backward);          /* 68 */
+            feature_vector.push_back(act_data_pkt_forward);             /* 69 */
+            feature_vector.push_back(min_seg_size_forward);             /* 70 */
 
             /* Flow Active. */
             if (count(flow_active) > 0) {
-                feature_vector.push_back(mean(flow_active));            /* 70 */
-                feature_vector.push_back(sqrt(variance(flow_active)));  /* 71 */
-                feature_vector.push_back((max)(flow_active));           /* 72 */
-                feature_vector.push_back((min)(flow_active));           /* 73 */
+                feature_vector.push_back(mean(flow_active));            /* 71 */
+                feature_vector.push_back(sqrt(variance(flow_active)));  /* 72 */
+                feature_vector.push_back((max)(flow_active));           /* 73 */
+                feature_vector.push_back((min)(flow_active));           /* 74 */
             } else {
                 feature_vector.push_back(0);
                 feature_vector.push_back(0);
@@ -855,10 +862,10 @@ class Connection {
 
             /* Flow Idle. */
             if (count(flow_idle) > 0) {
-                feature_vector.push_back(mean(flow_idle));              /* 74 */
-                feature_vector.push_back(sqrt(variance(flow_idle)));    /* 75 */
-                feature_vector.push_back((max)(flow_idle));             /* 76 */
-                feature_vector.push_back((min)(flow_idle));             /* 77 */
+                feature_vector.push_back(mean(flow_idle));              /* 75 */
+                feature_vector.push_back(sqrt(variance(flow_idle)));    /* 76 */
+                feature_vector.push_back((max)(flow_idle));             /* 77 */
+                feature_vector.push_back((min)(flow_idle));             /* 78 */
             }
             else {
                 feature_vector.push_back(0);
