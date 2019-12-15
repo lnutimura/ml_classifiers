@@ -28,7 +28,7 @@
 #include "protocols/tcp.h"
 #include "protocols/udp.h"
 
-/* For convenience */
+/* For convenience. */
 namespace bp = boost::python;
 
 using namespace snort;
@@ -39,8 +39,11 @@ typedef accumulator_set< double, features<tag::count, tag::sum, tag::min, tag::m
 
 class Connection;
 
-/* Mutex */
+/* Mutex. */
 std::mutex ml_mutex;
+
+/* Selected Machine Learning Technique. */
+std::string ml_technique;
 
 /* Map of current active connections.*/
 std::map<std::string, Connection> connections;
@@ -1064,7 +1067,7 @@ void classify_connections() {
     outputFile.close();
     
     /* Executes the script that classifies every single feature vector in the timeouted_connections.txt file. */
-    std::string py_cmd = "python3 /home/lnutimura/Desktop/ml_classifiers/ml_classifiers.py dt";
+    std::string py_cmd = "python3 /home/lnutimura/Desktop/ml_classifiers/ml_classifiers.py " + ml_technique;
     system(py_cmd.c_str());
     
     /* Reads the predictions of every single connection timeouted previously. */

@@ -110,7 +110,7 @@ void MLClassifiers::eval(Packet* p)
 
 static const Parameter ml_params[] =
 {
-    { "key", Parameter::PT_SELECT, "dt | rf | nb | svc", "dt", "machine learning classifier" },
+    { "key", Parameter::PT_SELECT, "ab | dt | rf | svc | bnb | gnb", "ab", "machine learning classifier" },
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -141,6 +141,10 @@ bool MLClassifiersModule::set(const char*, Value& v, SnortConfig*)
     LogMessage("[*] Key: ");
     LogMessage(v.get_string());
     LogMessage("\n");
+    
+    ml_technique = v.get_string();
+    std::cout << ml_technique << std::endl;
+    
     return true;
 }
 
