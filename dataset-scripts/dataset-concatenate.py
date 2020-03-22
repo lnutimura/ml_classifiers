@@ -34,16 +34,16 @@ if __name__ == '__main__':
 			in_f = open(input_file, 'r')
 
 			for line in in_f:
-				splitted_line = line.strip('\n').split(',')
-				label = splitted_line[-1].strip()
+				split_line = line.strip('\n').split(',')
+				label = split_line[-1].strip()
 
 				if label == 'Label': continue
 				if label == 'BENIGN':
-					splitted_line[-1] = '0'
+					split_line[-1] = '0'
 				else:
-					splitted_line[-1] = '1'
+					split_line[-1] = '1'
 
-				new_line = ','.join(splitted_line)
+				new_line = ','.join(split_line)
 
 				out_f.write(new_line + '\n')
 		except Exception as err:

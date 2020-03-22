@@ -1,0 +1,4 @@
+[0, 0.9294448397500967, {'C': 100}, 1861.9709231853485]
+[1, 0.9906322415670135, {'learning_rate': 1, 'n_estimators': 100}, 11682.068260908127]
+[2, 0.9497529284921641, {'max_depth': None, 'max_features': 1.0, 'min_samples_leaf': 0.1, 'min_samples_split': 0.1}, 3445.209409236908]
+[3, 0.9498137026298448, {'max_depth': None, 'max_features': 0.5, 'min_samples_leaf': 0.1, 'min_samples_split': 0.2, 'n_estimators': 100}, 102302.89634490013]
