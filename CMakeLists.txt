@@ -1,64 +1,73 @@
-cmake_minimum_required ( VERSION 3.4.3 )
-project ( ml_classifiers CXX )
+cmake_minimum_required(VERSION 3.16)
+project(ml_classifiers CXX)
 
-set (CMAKE_CXX_STANDARD 11)
-set (CMAKE_CXX_STANDARD_REQUIRED ON)
-set (CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-set (CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} "/home/lnutimura/snort_src/boost_1_67_0")
-#set (CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} "/usr/include/python3.7")
+include(GNUInstallDirs)
 
-if ( APPLE )
-    set ( CMAKE_MACOSX_RPATH OFF )
-endif ( APPLE )
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SNORT3 snort>=3)
 
-include ( FindPkgConfig )
-pkg_search_module ( SNORT3 REQUIRED snort>=3 )
+add_executable(test_flow_features
+    test/test_flow_features.cc
+    src/flow_features.cc
+)
+target_include_directories(test_flow_features PRIVATE src)
+target_compile_options(test_flow_features PRIVATE -Wall -Wextra -Werror)
 
-add_library (
-    ml_classifiers MODULE
-    ml_classifiers.cc
-    ml_classifiers.h
+enable_testing()
+add_test(NAME flow_features COMMAND test_flow_features)
+
+if(NOT SNORT3_FOUND)
+    message(STATUS "snort>=3 was not found; the inspector module will not be built")
+    return()
+endif()
+
+find_package(Python3 REQUIRED COMPONENTS Development)
+
+add_library(ml_classifiers MODULE
+    src/ml_classifiers.cc
+    src/connection.cc
+    src/flow_features.cc
+    src/classifier.cc
 )
 
-if ( APPLE )
-    set_target_properties (
-        ml_classifiers
-        PROPERTIES
-            LINK_FLAGS "-undefined dynamic_lookup"
-    )
-endif ( APPLE )
+set_target_properties(ml_classifiers PROPERTIES PREFIX "")
 
-set_target_properties (
-    ml_classifiers
-    PROPERTIES
-        PREFIX ""
-)
-
-find_package ( Python3 COMPONENTS Interpreter Development )
-if ( Python3_FOUND )
-    find_package ( Boost COMPONENTS python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR} )
-endif ( Python3_FOUND )
-
-message ( "[*] PYTHON_LIBRARY_DIRS: ${Python3_LIBRARY_DIRS}" )
-message ( "[*] PYTHON_LIBRARIES: ${Python3_LIBRARIES}" )
-message ( "[*] PYTHON_EXECUTABLE: ${Python3_EXECUTABLE}" )
-message ( "[*] PYTHON_INCLUDE_DIRS: ${Python3_INCLUDE_DIRS}" )
-
-message ( "[*] BOOST_LIBRARY_DIRS: ${Boost_LIBRARY_DIRS}" )
-message ( "[*] BOOST_LIBRARIES: ${Boost_LIBRARIES}" )
-message ( "[*] BOOST_INCLUDE_DIRS: ${Boost_INCLUDE_DIRS}" )
-
-include_directories ( ${Python3_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} )
-target_link_libraries ( ml_classifiers ${Python3_LIBRARIES} ${Boost_LIBRARIES} )
-
-target_include_directories (
-    ml_classifiers PUBLIC
+target_include_directories(ml_classifiers PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${SNORT3_INCLUDE_DIRS}
+    ${Python3_INCLUDE_DIRS}
+)
+target_compile_options(ml_classifiers PRIVATE -Wall -Wextra ${SNORT3_CFLAGS_OTHER})
+target_compile_definitions(ml_classifiers PRIVATE
+    HAVE_VISIBILITY
+    ML_CLASSIFIERS_SCRIPT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/python"
+)
+target_link_libraries(ml_classifiers PRIVATE
+    ${Python3_LIBRARIES}
+    ${CMAKE_DL_LIBS}
 )
 
-install (
-    TARGETS ml_classifiers
-    LIBRARY
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/${CMAKE_PROJECT_NAME}/inspectors"
+add_custom_command(TARGET ml_classifiers POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ml_classifiers>/ml_py
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/ml_classifiers.py
+        $<TARGET_FILE_DIR:ml_classifiers>/ml_py/ml_classifiers.py
+    VERBATIM
 )
+
+install(TARGETS ml_classifiers
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/snort/inspectors"
+)
+install(FILES python/ml_classifiers.py
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/snort/inspectors/ml_py"
+)
+
+if(APPLE)
+    set_target_properties(ml_classifiers PROPERTIES
+        LINK_FLAGS "-undefined dynamic_lookup"
+    )
+endif()
